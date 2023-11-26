@@ -2,21 +2,20 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/interfaces/IERC20.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+// import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 
-contract BinderContract is PausableUpgradeable {
-
+contract BinderContract {
     /* ================ Struct ================ */
-    enum BinderState { 
-        NotRegistered, 
-        NoOwner, 
-        OnAuction, 
-        HasOwner, 
-        WaitingForRenewal 
+    enum BinderState {
+        NotRegistered,
+        NoOwner,
+        OnAuction,
+        HasOwner,
+        WaitingForRenewal
     }
 
     struct BinderStorage {
-        bool isRegistered;
         BinderState currentState;
         address owner;
         uint256 lastInteractionTime;
@@ -44,12 +43,9 @@ contract BinderContract is PausableUpgradeable {
     mapping(string => mapping(address => uint256)) public userInvestedAmount;
     mapping(string => uint256) public userInvestedAmountMax;
 
-
     // TODO: change to `initialize`
-    constructor(
-        address tokenAddress_,
-        address backendSigner_
-    ) {
+    
+    constructor(address tokenAddress_, address backendSigner_) {
         tokenAddress = IERC20(tokenAddress_);
         backendSigner = backendSigner_;
         // owner = address(0);
@@ -64,19 +60,70 @@ contract BinderContract is PausableUpgradeable {
 
     /* ================ Modifiers ================ */
     modifier onlyWhenStateIs(string memory binderName, BinderState state) {
-        require(binderStorage[binderName].currentState == state, "Binder: Invalid state");
+        string memory errorMessage;
+        if (state == BinderState.NotRegistered) {
+            errorMessage = "Not in state 'NotRegistered'!";
+        } else if (state == BinderState.NoOwner) {
+            errorMessage = "Not in state 'NoOwner'!";
+        } else if (state == BinderState.OnAuction) {
+            errorMessage = "Not in state 'OnAuction'!";
+        } else if (state == BinderState.HasOwner) {
+            errorMessage = "Not in state 'HasOwner'!";
+        } else if (state == BinderState.WaitingForRenewal) {
+            errorMessage = "Not in state 'WaitingForRenewal'!";
+        } else {
+            errorMessage = "Invalid state!";
+        }
+        require(
+            binderStorage[binderName].currentState == state,
+            errorMessage
+        );
+        _;
+    }
+
+    modifier whenStateIsNot(string memory binderName, BinderState state) {
+        string memory errorMessage;
+        if (state == BinderState.NotRegistered) {
+            errorMessage = "In state 'NotRegistered'!";
+        } else if (state == BinderState.NoOwner) {
+            errorMessage = "In state 'NoOwner'!";
+        } else if (state == BinderState.OnAuction) {
+            errorMessage = "In state 'OnAuction'!";
+        } else if (state == BinderState.HasOwner) {
+            errorMessage = "In state 'HasOwner'!";
+        } else if (state == BinderState.WaitingForRenewal) {
+            errorMessage = "In state 'WaitingForRenewal'!";
+        } else {
+            errorMessage = "Invalid state!";
+        }
+        require(
+            binderStorage[binderName].currentState != state,
+            errorMessage
+        );
         _;
     }
 
     /* ================ View functions ================ */
-
-
-    /* ================ Write functions ================ */
-    function register(string memory binderName) public onlyWhenStateIs(binderName, BinderState.NotRegistered) {
-        binderStorage[binderName].currentState = BinderState.NoOwner;
-        binderStorage[binderName].lastInteractionTime = block.timestamp;
+    function bindingFunction(uint x) public pure returns (uint) {
+        return 10 * x * x;
     }
 
+    /* ================ Write functions ================ */
+    /* ------ S0: NotRegistered ------ */
+    function register(
+        string memory binderName
+        // bytes memory signature
+
+    ) public onlyWhenStateIs(binderName, BinderState.NotRegistered) {
+        binderStorage[binderName].currentState = BinderState.NoOwner;
+    }
+
+    /* ------ S1~S4: Can buy/sell ------ */
+    // function buyShare
+    // function sellShare
+
+    /* ------ S4: WaitingForRenewal ------ */
+    // function renewOwnership
 
     // function register() public {
     //     require(currentState == State.NotRegistered, "Binder already registered");
