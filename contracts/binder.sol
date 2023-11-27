@@ -19,16 +19,16 @@ contract BinderContract is OwnableUpgradeable {
     struct BinderStorage {
         BinderState state;
         address owner;  // Owner of the binder. Default to the contract address. (TODO: confirm this)
-        address userInvestedMost; // The user who has invested the most to this binder, in this epoch.
-        int userInvestedAmountMax; // The amount of token which this user has invested, in this epoch.
-        uint lastInteractionTime;
+        // address userInvestedMost; // The user who has invested the most to this binder, in this epoch.
+        // int userInvestedAmountMax; // The amount of token which this user has invested, in this epoch.
+        uint lastTimePoint;
         uint totalShare;
         uint16 auctionEpoch; // The epoch of the auction. Add 1 only when auction starts again.
     }
 
     struct UserBinderStorage {
         uint userShare;
-        int userInvestedAmount; // The amount of token that a user has invested to this binder, in this epoch.
+        int investedAmount; // The amount of token that a user has invested to this binder, in this epoch.
         uint16 investedEpoch; // Add 1 only when a user invests again in a new auction epoch.
     }
 
@@ -53,6 +53,7 @@ contract BinderContract is OwnableUpgradeable {
     /* ------ Storage ------ */
     mapping(string => BinderStorage) public binders; // TODO: change to get() functions
     mapping(string => mapping(address => UserBinderStorage)) public users;
+    mapping(string => address []) public participantList;
 
     /* ================ Constructor ================ */
     function initialize(
@@ -134,6 +135,20 @@ contract BinderContract is OwnableUpgradeable {
         return sum;
     }
 
+    function findTopInvestor(string memory name) public view returns (address) {
+        address topInvestor = participantList[name][0];
+        int topInvestedAmount = users[name][topInvestor].investedAmount;
+        for (uint i = 1; i < participantList[name].length; i++) {
+            address investor = participantList[name][i];
+            int amount = users[name][investor].investedAmount;
+            if (amount > topInvestedAmount) {
+                topInvestor = investor;
+                topInvestedAmount = amount;
+            }
+        }
+        return topInvestor;
+    }
+
     /* ================ Write functions ================ */
     /* ------ S0: NotRegistered ------ */
     function register(
@@ -149,6 +164,95 @@ contract BinderContract is OwnableUpgradeable {
     }
 
     /* ------ S1~S4: Can buy/sell ------ */
+    function _stateChangingBuyNoOwner(
+        address user,
+        string memory name,
+        uint256 shareNum
+    )
+        internal
+        shareNumNotZero(shareNum) // TODO: delete this when main function is done
+        onlyWhenStateIs(name, BinderState.NoOwner)
+    {   
+        BinderStorage memory currentBinder = binders[name];
+        UserBinderStorage memory currentUser = users[name][user];
+
+        binders[name] = BinderStorage({
+            state: BinderState.OnAuction, // State: 1 -> 2
+            owner: address(this),
+            lastTimePoint: block.timestamp,
+            totalShare: currentBinder.totalShare + shareNum,
+            auctionEpoch: currentBinder.auctionEpoch + 1
+        });
+
+        users[name][user] = UserBinderStorage({
+            userShare: currentUser.userShare + shareNum,
+            investedAmount: 0,
+            investedEpoch: currentBinder.auctionEpoch + 1
+        });
+
+        participantList[name] = [user];
+    }
+
+    function _stateChangeingBuyOnAuction(
+        address user,
+        string memory name,
+        uint256 shareNum
+    )
+        internal
+        shareNumNotZero(shareNum)
+        onlyWhenStateIs(name, BinderState.OnAuction)
+    {
+        BinderStorage memory currentBinder = binders[name];
+        UserBinderStorage memory currentUser = users[name][user];
+
+        // if (currentUser.investedEpoch != currentBinder.auctionEpoch) {
+        //     users[name][user] = UserBinderStorage({
+        //         userShare: currentUser.userShare + shareNum,
+        //         investedAmount: 0, // TODO: Add the invested amount outside
+        //         investedEpoch: currentBinder.auctionEpoch   // Synchrnoize the epoch
+        //     });
+        // } else {
+        //     users[name][user].userShare += shareNum;
+        // }
+
+        if (block.timestamp - currentBinder.lastTimePoint > AUCTION_DURATION) {
+            // The auction is over!
+            address topInvestor = findTopInvestor(name);
+            binders[name] = BinderStorage({
+                state: BinderState.HasOwner, // State: 2 -> 3
+                owner: topInvestor,
+                lastTimePoint: block.timestamp,
+                totalShare: currentBinder.totalShare + shareNum,
+                auctionEpoch: currentBinder.auctionEpoch
+            });
+
+            // No longer need to update the user invested amount
+        } else {
+
+        }
+
+
+
+        // binders[name] = BinderStorage({
+        //     state: BinderState.OnAuction, // State: 2 -> 2
+        //     owner: address(this),
+        //     lastTimePoint: block.timestamp,
+        //     totalShare: currentBinder.totalShare + shareNum,
+        //     auctionEpoch: currentBinder.auctionEpoch
+        // });
+
+        // users[name][user] = UserBinderStorage({
+        //     userShare: currentUser.userShare + shareNum,
+        //     investedAmount: currentUser.investedAmount,
+        //     investedEpoch: currentBinder.auctionEpoch
+        // });
+
+        // participantList[name].push(user);
+    }
+
+
+
+
     function buyShare(
         string memory name,
         uint256 shareNum
@@ -160,7 +264,7 @@ contract BinderContract is OwnableUpgradeable {
         // Init variables
         address user = msg.sender;
         BinderStorage memory currentBinder = binders[name];
-        UserBinderStorage memory currentUserStorage = users[name][user];
+        // UserBinderStorage memory currentUserStorage = users[name][user];
 
         // TODO: Check signature
 
@@ -173,27 +277,23 @@ contract BinderContract is OwnableUpgradeable {
 
         // BinderState state;
         // address owner;  // Owner of the binder. Default to the contract address. (TODO: confirm this)
-        // address userInvestedMost; // The user who has invested the most to this binder, in this epoch.
-        // int userInvestedAmountMax; // The amount of token which this user has invested, in this epoch.
-        // uint lastInteractionTime;
+        // uint lastTimePoint;
         // uint totalShare;
         // uint16 auctionEpoch; // The epoch of the auction. Add 1 only when auction starts again.
 
-        // int userInvestedAmount; // The amount of token that a user has invested to this binder, in this epoch.
+        // int investedAmount; // The amount of token that a user has invested to this binder, in this epoch.
         // uint userShare;
         // uint16 investedEpoch; // Add 1 only when a user invests again in a new auction epoch.
 
         // Case 1: The behavior of this buyer invoke a new epoch of auction... 
         if (currentBinder.state == BinderState.NoOwner) {
-            users[name][user].userInvestedAmount = 0;   // Reset the invested amount
+            users[name][user].investedAmount = 0;   // Reset the invested amount
             users[name][user].investedEpoch = currentBinder.auctionEpoch + 1;
 
             binders[name] = BinderStorage({
                 state: BinderState.OnAuction,
                 owner: address(this),
-                userInvestedMost: user,
-                userInvestedAmountMax: int(totalCost),
-                lastInteractionTime: block.timestamp,
+                lastTimePoint: block.timestamp,
                 totalShare: currentBinder.totalShare + shareNum,
                 auctionEpoch: currentBinder.auctionEpoch + 1
             });
@@ -202,18 +302,18 @@ contract BinderContract is OwnableUpgradeable {
         // Case 2: It's in the auction phase currently...
         else if (currentBinder.state == BinderState.OnAuction) {
             if (users[name][user].investedEpoch != binders[name].auctionEpoch) {
-                users[name][user].userInvestedAmount = 0;
+                users[name][user].investedAmount = 0;
                 users[name][user].investedEpoch = binders[name].auctionEpoch;   // Synchrnoize the epoch
             } else {
                 // Do nothing. Delete this.
             }
 
-            if (block.timestamp - currentBinder.lastInteractionTime > AUCTION_DURATION) {
+            if (block.timestamp - currentBinder.lastTimePoint > AUCTION_DURATION) {
                 // The auction is over!
                 // binders[name] = BinderStorage({
                 //     state: BinderState.HasOwner,
                 //     owner: address(this),
-                //     // lastInteractionTime: block.timestamp,
+                //     // lastTimePoint: block.timestamp,
                 //     // totalShare: currentBinder.totalShare + shareNum,
                 //     // userInvestedAmountMax: int(totalCost),
                 //     // auctionEpoch: currentBinder.auctionEpoch
@@ -233,7 +333,7 @@ contract BinderContract is OwnableUpgradeable {
             // binders[name].userInvestedAmountMax += int(totalCost);
         } else if (currentBinder.state == BinderState.WaitingForRenewal) {
             // binders[name].currentState = BinderState.OnAuction;
-            // binders[name].lastInteractionTime = block.timestamp;
+            // binders[name].lastTimePoint = block.timestamp;
             // binders[name].totalShare = shareNum;
             // binders[name].userInvestedAmountMax = int(totalCost);
             // binders[name].auctionEpoch += 1;
@@ -243,7 +343,7 @@ contract BinderContract is OwnableUpgradeable {
 
         // Whatever is the case, some fields should be updated
         users[name][user].userShare += shareNum;
-        users[name][user].userInvestedAmount += int(totalCost);
+        users[name][user].investedAmount += int(totalCost);
 
 
     }
@@ -255,7 +355,7 @@ contract BinderContract is OwnableUpgradeable {
     // function claimFee
 
 
-    
+
 
     /* ------ S4: WaitingForRenewal ------ */
     // function renewOwnership
