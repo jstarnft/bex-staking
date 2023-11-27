@@ -19,20 +19,17 @@ contract BinderContract is OwnableUpgradeable {
     struct BinderStorage {
         BinderState state;
         address owner;  // Owner of the binder. Default to the contract address. (TODO: confirm this)
-        // address userInvestedMost; // The user who has invested the most to this binder, in this epoch.
-        // int userInvestedAmountMax; // The amount of token which this user has invested, in this epoch.
         uint lastTimePoint;
         uint totalShare;
         uint16 auctionEpoch; // The epoch of the auction. Add 1 only when auction starts again.
     }
 
-    struct UserBinderStorage {
-        uint userShare;
-        int investedAmount; // The amount of token that a user has invested to this binder, in this epoch.
-        uint16 investedEpoch; // Add 1 only when a user invests again in a new auction epoch.
-    }
-
     /* ================ Variables ================ */
+    /* ------ Time period ------ */
+    uint256 public constant AUCTION_DURATION = 2 days;
+    uint256 public constant HOLDING_PERIOD = 90 days;
+    uint256 public constant RENEWAL_WINDOW = 2 days;
+
     /* ------ Admin & token & basic ------ */
     IERC20 public tokenAddress;
 
@@ -41,19 +38,15 @@ contract BinderContract is OwnableUpgradeable {
     uint256 public SIGNATURE_VALID_TIME = 3 minutes;
     // uint256 immutable SIGNATURE_SALT;
 
-    /* ------ States ------ */
-    uint256 public constant AUCTION_DURATION = 2 days;
-    uint256 public constant RENEWAL_PERIOD = 90 days;
-    uint256 public constant RENEWAL_WINDOW = 2 days;
-
     /* ------ Tax ------ */
     uint256 public taxBasePointProtocol;
     uint256 public taxBasePointOwner;
 
     /* ------ Storage ------ */
     mapping(string => BinderStorage) public binders; // TODO: change to get() functions
-    mapping(string => mapping(address => UserBinderStorage)) public users;
-    mapping(string => address []) public participantList;
+    mapping(string => mapping(address => uint)) public userShare; // binder => user => shareNum
+    mapping(string => mapping(uint16 => address [])) public userList; // binder => epoch => address[]
+    mapping(string => mapping(uint16 => mapping(address => int))) public userInvested; // binder => epoch => user => investedAmount
 
     /* ================ Constructor ================ */
     function initialize(
@@ -135,12 +128,13 @@ contract BinderContract is OwnableUpgradeable {
         return sum;
     }
 
-    function findTopInvestor(string memory name) public view returns (address) {
-        address topInvestor = participantList[name][0];
-        int topInvestedAmount = users[name][topInvestor].investedAmount;
-        for (uint i = 1; i < participantList[name].length; i++) {
-            address investor = participantList[name][i];
-            int amount = users[name][investor].investedAmount;
+    function findTopInvestor(string memory name, uint16 epoch) public view returns (address) {
+        address [] memory userListThis = userList[name][epoch];
+        address topInvestor = userListThis[0];
+        int topInvestedAmount = userInvested[name][epoch][topInvestor];
+        for (uint i = 1; i < userListThis.length; i++) {
+            address investor = userListThis[i];
+            int amount = userInvested[name][epoch][investor];
             if (amount > topInvestedAmount) {
                 topInvestor = investor;
                 topInvestedAmount = amount;
@@ -150,7 +144,6 @@ contract BinderContract is OwnableUpgradeable {
     }
 
     /* ================ Write functions ================ */
-    /* ------ S0: NotRegistered ------ */
     function register(
         string memory name
     )
@@ -163,91 +156,95 @@ contract BinderContract is OwnableUpgradeable {
         binders[name].state = BinderState.NoOwner;
     }
 
-    /* ------ S1~S4: Can buy/sell ------ */
-    function _stateChangingBuyNoOwner(
+    function _stateUpdateBuyNoOwner(
         address user,
         string memory name,
         uint256 shareNum
     )
         internal
-        shareNumNotZero(shareNum) // TODO: delete this when main function is done
         onlyWhenStateIs(name, BinderState.NoOwner)
     {   
         BinderStorage memory currentBinder = binders[name];
-        UserBinderStorage memory currentUser = users[name][user];
+        uint16 newEpoch = currentBinder.auctionEpoch + 1;
 
         binders[name] = BinderStorage({
             state: BinderState.OnAuction, // State: 1 -> 2
             owner: address(this),
             lastTimePoint: block.timestamp,
             totalShare: currentBinder.totalShare + shareNum,
-            auctionEpoch: currentBinder.auctionEpoch + 1
+            auctionEpoch: newEpoch
         });
 
-        users[name][user] = UserBinderStorage({
-            userShare: currentUser.userShare + shareNum,
-            investedAmount: 0,
-            investedEpoch: currentBinder.auctionEpoch + 1
-        });
-
-        participantList[name] = [user];
+        userList[name][newEpoch] = [user];
     }
 
-    function _stateChangeingBuyOnAuction(
+    function _stateUpdateBuyOnAuction(
         address user,
         string memory name,
         uint256 shareNum
     )
         internal
-        shareNumNotZero(shareNum)
         onlyWhenStateIs(name, BinderState.OnAuction)
     {
         BinderStorage memory currentBinder = binders[name];
-        UserBinderStorage memory currentUser = users[name][user];
+        uint16 epoch = currentBinder.auctionEpoch;
 
-        // if (currentUser.investedEpoch != currentBinder.auctionEpoch) {
-        //     users[name][user] = UserBinderStorage({
-        //         userShare: currentUser.userShare + shareNum,
-        //         investedAmount: 0, // TODO: Add the invested amount outside
-        //         investedEpoch: currentBinder.auctionEpoch   // Synchrnoize the epoch
-        //     });
-        // } else {
-        //     users[name][user].userShare += shareNum;
-        // }
-
-        if (block.timestamp - currentBinder.lastTimePoint > AUCTION_DURATION) {
+        if (block.timestamp - currentBinder.lastTimePoint < AUCTION_DURATION) {
+            binders[name].totalShare += shareNum;
+            if (userInvested[name][epoch][user] == 0) { // If the user is the first time to invest in this epoch
+                userList[name][epoch].push(user);
+            }
+        } else {
             // The auction is over!
-            address topInvestor = findTopInvestor(name);
+            address topInvestor = findTopInvestor(name, epoch);
             binders[name] = BinderStorage({
                 state: BinderState.HasOwner, // State: 2 -> 3
                 owner: topInvestor,
                 lastTimePoint: block.timestamp,
                 totalShare: currentBinder.totalShare + shareNum,
-                auctionEpoch: currentBinder.auctionEpoch
+                auctionEpoch: epoch
             });
-
-            // No longer need to update the user invested amount
-        } else {
-
         }
+    }
 
+    function _stateUpdateBuyHasOwner(
+        address,
+        string memory name,
+        uint256 shareNum
+    )
+        internal
+        onlyWhenStateIs(name, BinderState.HasOwner)
+    {
+        BinderStorage memory currentBinder = binders[name];
 
+        if (block.timestamp - currentBinder.lastTimePoint < HOLDING_PERIOD) {
+            // Nothing to do here, just kept for code cleanliness
+        } else {
+            // The owner's holding period is over!
+            binders[name].state = BinderState.WaitingForRenewal; // State: 3 -> 4
+            binders[name].lastTimePoint = block.timestamp;
+        }
+        binders[name].totalShare += shareNum;
+    }
 
-        // binders[name] = BinderStorage({
-        //     state: BinderState.OnAuction, // State: 2 -> 2
-        //     owner: address(this),
-        //     lastTimePoint: block.timestamp,
-        //     totalShare: currentBinder.totalShare + shareNum,
-        //     auctionEpoch: currentBinder.auctionEpoch
-        // });
+    function _stateUpdateBuyWaitingForRenewal(
+        address,
+        string memory name,
+        uint256 shareNum
+    )
+        internal
+        onlyWhenStateIs(name, BinderState.WaitingForRenewal)
+    {
+        BinderStorage memory currentBinder = binders[name];
 
-        // users[name][user] = UserBinderStorage({
-        //     userShare: currentUser.userShare + shareNum,
-        //     investedAmount: currentUser.investedAmount,
-        //     investedEpoch: currentBinder.auctionEpoch
-        // });
-
-        // participantList[name].push(user);
+        if (block.timestamp - currentBinder.lastTimePoint < RENEWAL_WINDOW) {
+            // Nothing to do here, just kept for code cleanliness
+        } else {
+            // The renewal window is over!
+            binders[name].state = BinderState.NoOwner; // State: 4 -> 1
+            binders[name].owner = address(this);
+        }
+        binders[name].totalShare += shareNum;
     }
 
 
@@ -264,6 +261,7 @@ contract BinderContract is OwnableUpgradeable {
         // Init variables
         address user = msg.sender;
         BinderStorage memory currentBinder = binders[name];
+        uint16 epoch = currentBinder.auctionEpoch;
         // UserBinderStorage memory currentUserStorage = users[name][user];
 
         // TODO: Check signature
@@ -275,77 +273,34 @@ contract BinderContract is OwnableUpgradeable {
         );
         tokenAddress.transferFrom(msg.sender, address(this), totalCost);
 
-        // BinderState state;
-        // address owner;  // Owner of the binder. Default to the contract address. (TODO: confirm this)
-        // uint lastTimePoint;
-        // uint totalShare;
-        // uint16 auctionEpoch; // The epoch of the auction. Add 1 only when auction starts again.
-
-        // int investedAmount; // The amount of token that a user has invested to this binder, in this epoch.
-        // uint userShare;
-        // uint16 investedEpoch; // Add 1 only when a user invests again in a new auction epoch.
-
         // Case 1: The behavior of this buyer invoke a new epoch of auction... 
         if (currentBinder.state == BinderState.NoOwner) {
-            users[name][user].investedAmount = 0;   // Reset the invested amount
-            users[name][user].investedEpoch = currentBinder.auctionEpoch + 1;
-
-            binders[name] = BinderStorage({
-                state: BinderState.OnAuction,
-                owner: address(this),
-                lastTimePoint: block.timestamp,
-                totalShare: currentBinder.totalShare + shareNum,
-                auctionEpoch: currentBinder.auctionEpoch + 1
-            });
+            _stateUpdateBuyNoOwner(user, name, shareNum);
         } 
         
         // Case 2: It's in the auction phase currently...
         else if (currentBinder.state == BinderState.OnAuction) {
-            if (users[name][user].investedEpoch != binders[name].auctionEpoch) {
-                users[name][user].investedAmount = 0;
-                users[name][user].investedEpoch = binders[name].auctionEpoch;   // Synchrnoize the epoch
-            } else {
-                // Do nothing. Delete this.
-            }
-
-            if (block.timestamp - currentBinder.lastTimePoint > AUCTION_DURATION) {
-                // The auction is over!
-                // binders[name] = BinderStorage({
-                //     state: BinderState.HasOwner,
-                //     owner: address(this),
-                //     // lastTimePoint: block.timestamp,
-                //     // totalShare: currentBinder.totalShare + shareNum,
-                //     // userInvestedAmountMax: int(totalCost),
-                //     // auctionEpoch: currentBinder.auctionEpoch
-                // });
-            } else {
-                // ...
-            }
-
-
-
-
-            
-            // binders[name].totalShare += shareNum;
-            // binders[name].userInvestedAmountMax += int(totalCost);
-        } else if (currentBinder.state == BinderState.HasOwner) {
-            // binders[name].totalShare += shareNum;
-            // binders[name].userInvestedAmountMax += int(totalCost);
-        } else if (currentBinder.state == BinderState.WaitingForRenewal) {
-            // binders[name].currentState = BinderState.OnAuction;
-            // binders[name].lastTimePoint = block.timestamp;
-            // binders[name].totalShare = shareNum;
-            // binders[name].userInvestedAmountMax = int(totalCost);
-            // binders[name].auctionEpoch += 1;
-        } else {
+            _stateUpdateBuyOnAuction(user, name, shareNum);
+        } 
+        
+        // Case 3: A secure state and there is an owner.
+        else if (currentBinder.state == BinderState.HasOwner) {
+            _stateUpdateBuyHasOwner(user, name, shareNum);
+        } 
+        
+        // Case 4: Waiting for the owner's renewal...
+        else if (currentBinder.state == BinderState.WaitingForRenewal) {
+            _stateUpdateBuyWaitingForRenewal(user, name, shareNum);
+        }
+        
+        else {
             revert("Invalid state!");
         }
 
-        // Whatever is the case, some fields should be updated
-        users[name][user].userShare += shareNum;
-        users[name][user].investedAmount += int(totalCost);
-
-
+        // Whatever is the case, user's state variables should be updated
+        userShare[name][user] += shareNum;
+        userInvested[name][epoch][user] += int(totalCost);
+        
     }
 
 
@@ -359,28 +314,6 @@ contract BinderContract is OwnableUpgradeable {
 
     /* ------ S4: WaitingForRenewal ------ */
     // function renewOwnership
-
-    // function register() public {
-    //     require(currentState == State.NotRegistered, "Binder already registered");
-    //     currentState = State.NoOwner;
-    //     lastInteraction = block.timestamp;
-    //     emit Registered();
-    // }
-
-    // function buyShare() public payable {
-    //     require(currentState == State.NoOwner, "Cannot buy share, Binder has owner");
-    //     owner = msg.sender;
-    //     currentState = State.HasOwner;
-    //     lastInteraction = block.timestamp;
-    //     emit OwnershipTransferred(address(0), msg.sender);
-    // }
-
-    // function startAuction() public onlyOwner {
-    //     require(block.timestamp - lastInteraction >= RENEWAL_PERIOD, "Cannot start auction yet");
-    //     currentState = State.OnAuction;
-    //     lastInteraction = block.timestamp;
-    //     emit AuctionStarted();
-    // }
 
     // function renewOwnership() public onlyOwner {
     //     require(block.timestamp - lastInteraction <= RENEWAL_WINDOW, "Renewal period has expired");
@@ -397,13 +330,4 @@ contract BinderContract is OwnableUpgradeable {
 
     // // Additional logic for auction and transferring shares would go here
 
-    // // Check the state of the Binder based on the last interaction
-    // function checkState() public {
-    //     if (currentState == State.HasOwner && block.timestamp - lastInteraction >= RENEWAL_PERIOD) {
-    //         currentState = State.WaitingForRenewal;
-    //     } else if (currentState == State.WaitingForRenewal && block.timestamp - lastInteraction >= RENEWAL_WINDOW) {
-    //         currentState = State.NoOwner;
-    //         owner = address(0);
-    //     }
-    // }
 }
