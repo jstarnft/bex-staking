@@ -267,12 +267,6 @@ contract BinderContract is OwnableUpgradeable {
         if (binders[name].state == BinderState.OnAuction && userInvested[name][epoch][user] == 0) {
             userList[name][epoch].push(user);
         }
-        
-            // uint16 epoch = binders[name].auctionEpoch;
-            // if (binders[name].state == BinderState.OnAuction 
-            //         && userInvested[name][epoch][user] == 0) {
-            //     userList[name][epoch].push(user);
-            // }
     }
 
 
@@ -286,25 +280,20 @@ contract BinderContract is OwnableUpgradeable {
         returns (bool stateChanged)
     {
         // TODO: Check signature
-
-        // Transfer tokens
         address user = _msgSender();
+
+        // Transfer tokens to contract
         uint totalCost = bindingSumExclusive(totalShare[name], totalShare[name] + shareNum);
         tokenAddress.transferFrom(user, address(this), totalCost);
 
         // Update storage (state transfer)
         if (binders[name].state == BinderState.NoOwner) {
             _stateTransitionToAuction(name);
-            userList[name][binders[name].auctionEpoch] = [user];
             stateChanged = true;
         } else {
             stateChanged = _countdownTrigger(name);
-            uint16 epoch = binders[name].auctionEpoch;
-            if (binders[name].state == BinderState.OnAuction 
-                    && userInvested[name][epoch][user] == 0) {
-                userList[name][epoch].push(user);
-            }
         }
+        _userListManage(name, binders[name].auctionEpoch, user);
 
         // Update storage (share and token amount)
         totalShare[name] += shareNum;
@@ -322,43 +311,53 @@ contract BinderContract is OwnableUpgradeable {
         shareNumNotZero(shareNum)
         returns (bool stateChanged)
     {
+        // TODO: Check signature
         address user = _msgSender();
 
-        // // TODO: Check signature
-
         // Update storage (state transfer)
-        if (binders[name].state != BinderState.NoOwner) {
-            stateChanged = _countdownTrigger(name);
-            // uint16 epoch = binders[name].auctionEpoch;
-            // if (binders[name].state == BinderState.OnAuction 
-            //         && userInvested[name][epoch][user] == 0) {
-            //     userList[name][epoch].push(user);
-            // }
+        if (binders[name].state == BinderState.NoOwner) {
+            stateChanged = true;
         } else {
-            // _stateTransitionToAuction(name);
-            // userList[name][binders[name].auctionEpoch] = [user];
-            // stateChanged = true;
+            stateChanged = _countdownTrigger(name);
         }
+        _userListManage(name, binders[name].auctionEpoch, user);
 
-        // Transfer tokens
+        // Calculate and update fees
         uint totalReward = bindingSumExclusive(totalShare[name] - shareNum, totalShare[name]);
         uint feeForProtocol = totalReward * taxBasePointProtocol / 10000;
         uint feeForOwner = totalReward * taxBasePointOwner / 10000;
         uint actualReward = totalReward - feeForProtocol - feeForOwner;
-        tokenAddress.transfer(user, actualReward);
-
-        // Update storage (share and token amount)
         feeCollectedProtocol += feeForProtocol;
         feeCollectedOwner[name] += feeForOwner;
+
+        // Update storage (share and token amount)
         totalShare[name] -= shareNum;
         userShare[name][user] -= shareNum;
         userInvested[name][binders[name].auctionEpoch][user] -= int(totalReward);
+        
+        // Transfer tokens to user
+        tokenAddress.transfer(user, actualReward);
     }
 
 
-    // function sellShare
+    function renewOwnership(string memory name)
+        public
+        whenStateIsNot(name, BinderState.NotRegistered)
+        whenStateIsNot(name, BinderState.NoOwner)
+    {
+        
+    }
 
-    // function claimFee
+
+
+
+    // function collectFeeForOwner(string memory name)
+    //     public
+    //     whenStateIsNot(name, BinderState.NotRegistered)
+    //     returns (bool stateChanged)
+    // {
+
+    // }
 
 
 
