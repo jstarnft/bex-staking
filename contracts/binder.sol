@@ -5,9 +5,11 @@ import "@openzeppelin/contracts/interfaces/IERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 // import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 contract BinderContract is OwnableUpgradeable {
-    /* =========================== Struct =========================== */
+
+    /* ============================= Struct ============================= */
     enum BinderState {
         NotRegistered,
         NoOwner,
@@ -16,46 +18,48 @@ contract BinderContract is OwnableUpgradeable {
         WaitingForRenewal
     }
 
-    enum Trade {
-        Buy,
-        Sell
-    }
-
     struct BinderStorage {
-        BinderState state;
-        address owner;  // Owner of the binder. Default to the contract address. (TODO: confirm this)
-        uint lastTimePoint;
-        uint16 auctionEpoch; // The epoch of the auction. Add 1 only when auction starts again.
+        BinderState state;    // Current state of the binder
+        address owner;        // Owner of the binder. Defaults to the contract address
+        uint256 lastTimePoint;   // Timestamp of the last time-related event of this binder
+        uint16 auctionEpoch;  // The epoch of the auction, add by 1 when a new auction starts
     }
 
-    /* =========================== Variables =========================== */
-    /* ------ Time period ------ */
-    uint public constant AUCTION_DURATION = 2 days;
-    uint public constant HOLDING_PERIOD = 90 days;
-    uint public constant RENEWAL_WINDOW = 2 days;
+    /* ============================ Variables =========================== */
 
-    /* ------ Admin & token & basic ------ */
+    /* --------------- Time period -------------- */
+    uint256 public constant AUCTION_DURATION = 2 days;
+    uint256 public constant HOLDING_PERIOD = 90 days;
+    uint256 public constant RENEWAL_WINDOW = 2 days;
+
+    /* -------------- Token address ------------- */
     IERC20 public tokenAddress;
 
-    /* ------ Signature ------ */
+    /* ---------------- Signature --------------- */
     address public backendSigner;
-    uint public SIGNATURE_VALID_TIME = 3 minutes;
-    // uint immutable SIGNATURE_SALT;
+    uint256 public SIGNATURE_VALID_TIME = 3 minutes;
+    // uint256 immutable SIGNATURE_SALT;
 
-    /* ------ Tax ------ */
-    uint public taxBasePointProtocol;
-    uint public taxBasePointOwner;
-    uint public feeCollectedProtocol;
-    mapping(string => uint) public feeCollectedOwner;
+    /* ------------------- Tax ------------------ */
+    uint256 public taxBasePointProtocol;
+    uint256 public taxBasePointOwner;
+    uint256 public feeCollectedProtocol;
+    mapping(string => uint256) public feeCollectedOwner;
 
-    /* ------ Storage ------ */
+    /* ----------------- Storage ---------------- */
+    // binder => [storage for this binder]
     mapping(string => BinderStorage) public binders; // TODO: change to get() functions
-    mapping(string => uint) public totalShare; // binder => total share num
-    mapping(string => mapping(address => uint)) public userShare; // binder => user => user's share num
-    mapping(string => mapping(uint16 => address [])) public userList; // binder => epoch => address[]
-    mapping(string => mapping(uint16 => mapping(address => int))) public userInvested; // binder => epoch => user => user's invested amount
+    // binder => [total share num of this binder]
+    mapping(string => uint256) public totalShare;
+    // binder => user => [user's share num of this binder]
+    mapping(string => mapping(address => uint256)) public userShare;
+    // binder => epoch => [participated user list of this binder in this epoch]
+    mapping(string => mapping(uint16 => address [])) public userList;
+    // binder => epoch => user => [user's invested amount for this binder in this epoch]
+    mapping(string => mapping(uint16 => mapping(address => int))) public userInvested; 
 
-    /* =========================== Constructor =========================== */
+
+    /* =========================== Constructor ========================== */
     function initialize(
         address tokenAddress_,
         address backendSigner_
@@ -72,15 +76,26 @@ contract BinderContract is OwnableUpgradeable {
         taxBasePointOwner = 500;
     }
 
-    /* =========================== Events =========================== */
+
+    /* ============================= Events ============================= */
     // TODO: add events
 
-    /* =========================== Errors =========================== */
+
+    /* ============================= Errors ============================= */
     // TODO: add errors
 
-    /* =========================== Modifiers =========================== */
-    modifier shareNumNotZero(uint shareNum) {
+
+    /* ============================ Modifiers =========================== */
+    modifier shareNumNotZero(uint256 shareNum) {
         require(shareNum > 0, "Share num cannot be zero!");
+        _;
+    }
+
+    modifier onlyBinderOwner(string memory name) {
+        require(
+            binders[name].owner == _msgSender(), 
+            "Only the binder owner can call this function!"
+        );
         _;
     }
 
@@ -122,14 +137,45 @@ contract BinderContract is OwnableUpgradeable {
         _;
     }
 
-    /* =========================== View functions =========================== */
-    function bindingFunction(uint x) public virtual pure returns (uint) {
+    modifier checkSignature(
+        bytes4 selector,
+        string memory name,
+        uint256 content,    // Share amount or token amount or `0`.
+        address user,
+        uint256 timestamp,
+        bytes memory signature
+    ) {
+        bytes memory data = abi.encodePacked(
+            selector,
+            name,
+            content,
+            user,
+            timestamp
+        );
+        bytes32 signedMessageHash = ECDSA.toEthSignedMessageHash(data);
+        address signer = ECDSA.recover(signedMessageHash, signature);
+
+        require(
+            block.timestamp - timestamp <= SIGNATURE_VALID_TIME,
+            "Signature expired!"
+        );
+
+        require(
+            signer == backendSigner,
+            "Not the correct signer or invalid signature!"
+        );
+        _;
+    }
+
+
+    /* ========================= View functions ========================= */
+    function bindingFunction(uint256 x) public virtual pure returns (uint256) {
         return 10 * x * x;
     }
 
-    function bindingSumExclusive(uint start, uint end) public virtual pure returns (uint) {
-        uint sum = 0;
-        for (uint i = start; i < end; i++) {
+    function bindingSumExclusive(uint256 start, uint256 end) public virtual pure returns (uint256) {
+        uint256 sum = 0;
+        for (uint256 i = start; i < end; i++) {
             sum += bindingFunction(i);
         }
         return sum;
@@ -139,7 +185,7 @@ contract BinderContract is OwnableUpgradeable {
         address [] memory userListThis = userList[name][epoch];
         address topInvestor = userListThis[0];
         int topInvestedAmount = userInvested[name][epoch][topInvestor];
-        for (uint i = 1; i < userListThis.length; i++) {
+        for (uint256 i = 1; i < userListThis.length; i++) {
             address investor = userListThis[i];
             int amount = userInvested[name][epoch][investor];
             if (amount > topInvestedAmount) {   // If tied for the top, the first one wins.
@@ -150,7 +196,10 @@ contract BinderContract is OwnableUpgradeable {
         return topInvestor;
     }
 
-    /* =========================== Write functions =========================== */
+
+    /* ========================= Write functions ======================== */
+
+    /* ---------------- Register ---------------- */
     function register(string memory name)
         public
         onlyWhenStateIs(name, BinderState.NotRegistered)
@@ -161,7 +210,7 @@ contract BinderContract is OwnableUpgradeable {
         binders[name].state = BinderState.NoOwner;
     }
 
-    /* ------ State transition related functions ------ */
+    /* --------- Internal state transfer -------- */
     function _countdownTriggerOnAuction(string memory name)
         internal
         onlyWhenStateIs(name, BinderState.OnAuction)
@@ -269,10 +318,10 @@ contract BinderContract is OwnableUpgradeable {
         }
     }
 
-
+    /* --------------- Buy & Sell --------------- */
     function buyShare(
         string memory name,
-        uint shareNum
+        uint256 shareNum
     )
         public
         whenStateIsNot(name, BinderState.NotRegistered)
@@ -283,7 +332,7 @@ contract BinderContract is OwnableUpgradeable {
         address user = _msgSender();
 
         // Transfer tokens to contract
-        uint totalCost = bindingSumExclusive(totalShare[name], totalShare[name] + shareNum);
+        uint256 totalCost = bindingSumExclusive(totalShare[name], totalShare[name] + shareNum);
         tokenAddress.transferFrom(user, address(this), totalCost);
 
         // Update storage (state transfer)
@@ -301,10 +350,9 @@ contract BinderContract is OwnableUpgradeable {
         userInvested[name][binders[name].auctionEpoch][user] += int(totalCost);
     }
 
-
     function sellShare(
         string memory name,
-        uint shareNum
+        uint256 shareNum
     )
         public
         whenStateIsNot(name, BinderState.NotRegistered)
@@ -323,10 +371,10 @@ contract BinderContract is OwnableUpgradeable {
         _userListManage(name, binders[name].auctionEpoch, user);
 
         // Calculate and update fees
-        uint totalReward = bindingSumExclusive(totalShare[name] - shareNum, totalShare[name]);
-        uint feeForProtocol = totalReward * taxBasePointProtocol / 10000;
-        uint feeForOwner = totalReward * taxBasePointOwner / 10000;
-        uint actualReward = totalReward - feeForProtocol - feeForOwner;
+        uint256 totalReward = bindingSumExclusive(totalShare[name] - shareNum, totalShare[name]);
+        uint256 feeForProtocol = totalReward * taxBasePointProtocol / 10000;
+        uint256 feeForOwner = totalReward * taxBasePointOwner / 10000;
+        uint256 actualReward = totalReward - feeForProtocol - feeForOwner;
         feeCollectedProtocol += feeForProtocol;
         feeCollectedOwner[name] += feeForOwner;
 
@@ -339,45 +387,45 @@ contract BinderContract is OwnableUpgradeable {
         tokenAddress.transfer(user, actualReward);
     }
 
-
-    function renewOwnership(string memory name)
+    /* ------------ For binder owner ------------ */
+    function renewOwnership(
+        string memory name,
+        uint256 tokenAmount
+    )
         public
-        whenStateIsNot(name, BinderState.NotRegistered)
-        whenStateIsNot(name, BinderState.NoOwner)
+        onlyBinderOwner(name)
+        onlyWhenStateIs(name, BinderState.WaitingForRenewal)
     {
-        
+        // TODO: Check signature
+
+        // Transfer tokens to contract
+        tokenAddress.transferFrom(_msgSender(), address(this), tokenAmount);
+
+        // Update storage (state transfer)
+        _stateTransitionWhenRenewed(name);
+
+        // Update storage (share and token amount)
+        feeCollectedProtocol += tokenAmount;
     }
 
+    function collectFeeForOwner(string memory name)
+        public
+        onlyBinderOwner(name)
+        whenStateIsNot(name, BinderState.NotRegistered)
+    {
+        uint256 fee = feeCollectedOwner[name];
+        feeCollectedOwner[name] = 0;
+        tokenAddress.transfer(_msgSender(), fee);
+    }
 
-
-
-    // function collectFeeForOwner(string memory name)
-    //     public
-    //     whenStateIsNot(name, BinderState.NotRegistered)
-    //     returns (bool stateChanged)
-    // {
-
-    // }
-
-
-
-
-    /* ------ S4: WaitingForRenewal ------ */
-    // function renewOwnership
-
-    // function renewOwnership() public onlyOwner {
-    //     require(block.timestamp - lastInteraction <= RENEWAL_WINDOW, "Renewal period has expired");
-    //     currentState = State.HasOwner;
-    //     lastInteraction = block.timestamp;
-    //     emit Renewal();
-    // }
-
-    // function transferOwnership(address newOwner) public onlyOwner {
-    //     require(newOwner != address(0), "New owner is the zero address");
-    //     emit OwnershipTransferred(owner, newOwner);
-    //     owner = newOwner;
-    // }
-
-    // // Additional logic for auction and transferring shares would go here
+    /* ---------------- For admin --------------- */
+    function collectFeeForProtocol()
+        public
+        onlyOwner
+    {
+        uint256 fee = feeCollectedProtocol;
+        feeCollectedProtocol = 0;
+        tokenAddress.transfer(_msgSender(), fee);
+    }
 
 }
