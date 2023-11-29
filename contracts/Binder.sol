@@ -8,6 +8,8 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
+    bool constant DISABLE_SIG_MODE = true;  // Just for debug. Will delete this later.
+
     /* ============================= Struct ============================= */
     enum BinderState {
         NotRegistered,
@@ -136,36 +138,6 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         _;
     }
 
-    modifier checkSignature(
-        bytes4 selector,
-        string memory name,
-        uint256 content,    // Share amount or token amount or `0`.
-        address user,
-        uint256 timestamp,
-        bytes memory signature
-    ) {
-        bytes memory data = abi.encodePacked(
-            selector,
-            name,
-            content,
-            user,
-            timestamp
-        );
-        bytes32 signedMessageHash = ECDSA.toEthSignedMessageHash(data);
-        address signer = ECDSA.recover(signedMessageHash, signature);
-
-        require(
-            block.timestamp - timestamp <= SIGNATURE_VALID_TIME,
-            "Signature expired!"
-        );
-
-        require(
-            signer == backendSigner,
-            "Not the correct signer or invalid signature!"
-        );
-        _;
-    }
-
 
     /* ========================= View functions ========================= */
     function bindingFunction(uint256 x) public virtual pure returns (uint256) {
@@ -195,6 +167,39 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         return topInvestor;
     }
 
+    function checkSignature(
+        bytes4 selector,
+        string memory name,
+        uint256 content,    // Share amount or token amount or `0`.
+        address user,
+        uint256 timestamp,
+        bytes memory signature
+    ) public view {
+        bytes memory data = abi.encodePacked(
+            selector,
+            name,
+            content,
+            user,
+            timestamp
+        );
+        bytes32 signedMessageHash = ECDSA.toEthSignedMessageHash(data);
+        address signer = ECDSA.recover(signedMessageHash, signature);
+        
+        require(
+            block.timestamp - timestamp <= SIGNATURE_VALID_TIME,
+            "Signature expired!"
+        );
+
+        require(
+            block.timestamp > timestamp,
+            "Invalid timestamp! Check the backend."
+        );
+
+        require(
+            signer == backendSigner || DISABLE_SIG_MODE, // Just for debug. Will delete this later.
+            "Not the correct signer or invalid signature!"
+        );
+    }
 
     /* ========================= Write functions ======================== */
 
@@ -320,7 +325,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     /* --------------- Buy & Sell --------------- */
     function buyShare(
         string memory name,
-        uint256 shareNum
+        uint256 shareNum,
+        uint256 timestamp,
+        bytes memory signature
     )
         public
         whenStateIsNot(name, BinderState.NotRegistered)
