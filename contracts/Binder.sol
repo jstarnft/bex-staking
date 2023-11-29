@@ -20,10 +20,10 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     }
 
     struct BinderStorage {
-        BinderState state;    // Current state of the binder
-        address owner;        // Owner of the binder. Defaults to the contract address
-        uint256 lastTimePoint;   // Timestamp of the last time-related event of this binder
-        uint16 auctionEpoch;  // The epoch of the auction, add by 1 when a new auction starts
+        BinderState state;          // Current state of the binder
+        address owner;              // Owner of the binder. Defaults to the contract address
+        uint256 lastTimePoint;      // Timestamp of the last time-related event of this binder
+        uint16 auctionEpoch;        // The epoch of the auction, add by 1 when a new auction starts
     }
 
     /* ============================ Variables =========================== */
@@ -33,22 +33,22 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     uint256 public constant HOLDING_PERIOD = 90 days;
     uint256 public constant RENEWAL_WINDOW = 2 days;
 
-    /* -------------- Token address ------------- */
+    /* ------------ Super parameters ------------ */
     IERC20 public tokenAddress;
-
-    /* ---------------- Signature --------------- */
     address public backendSigner;
-    uint256 public SIGNATURE_VALID_TIME = 3 minutes;
-
-    /* ------------------- Tax ------------------ */
+    uint256 public signatureValidTime;
     uint256 public taxBasePointProtocol;
     uint256 public taxBasePointOwner;
-    uint256 public feeCollectedProtocol;
-    mapping(string => uint256) public feeCollectedOwner;
 
     /* ----------------- Storage ---------------- */
+    // Total fee collected for the protocol
+    uint256 public feeCollectedProtocol;
+
+    // binder => [fee collected for this binder's owner]
+    mapping(string => uint256) public feeCollectedOwner;
+
     // binder => [storage for this binder]
-    mapping(string => BinderStorage) public binders; // TODO: change to get() functions
+    mapping(string => BinderStorage) public binders;
 
     // binder => [total share num of this binder]
     mapping(string => uint256) public totalShare;
@@ -78,6 +78,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         // Init tax base points (`500` means 5%)
         taxBasePointProtocol = 500;
         taxBasePointOwner = 500;
+
+        // Init signature valid time
+        signatureValidTime = 3 minutes;
     }
 
 
@@ -189,7 +192,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         address signer = ECDSA.recover(signedMessageHash, signature);
         
         require(
-            block.timestamp - timestamp <= SIGNATURE_VALID_TIME,
+            block.timestamp - timestamp <= signatureValidTime,
             "Signature expired!"
         );
 
@@ -203,6 +206,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             "Not the correct signer or invalid signature!"
         );
     }
+
 
     /* ========================= Write functions ======================== */
 
@@ -380,7 +384,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         } else {
             stateChanged = _countdownTrigger(name);
         }
-        _userListManage(name, binders[name].auctionEpoch, user);
+        uint16 epoch = binders[name].auctionEpoch;  // Prevent `stack too deep` error
+        _userListManage(name, epoch, user);
 
         // Calculate and update fees
         uint256 totalReward = bindingSumExclusive(totalShare[name] - shareNum, totalShare[name]);
@@ -392,7 +397,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         // Update storage (share and token amount)
         totalShare[name] -= shareNum;
         userShare[name][user] -= shareNum;
-        userInvested[name][binders[name].auctionEpoch][user] -= int(totalReward);
+        userInvested[name][epoch][user] -= int(totalReward);
         
         // Transfer tokens to user
         uint256 actualReward = totalReward - feeForProtocol - feeForOwner;
@@ -437,13 +442,15 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     }
 
     /* ---------------- For admin --------------- */
-    function collectFeeForProtocol()
-        public
-        onlyOwner
-    {
+    function collectFeeForProtocol() public onlyOwner {
         uint256 fee = feeCollectedProtocol;
         feeCollectedProtocol = 0;
         tokenAddress.transfer(_msgSender(), fee);
     }
+
+    // address public backendSigner;
+    // uint256 public signatureValidTime;
+    // uint256 public taxBasePointProtocol;
+    // uint256 public taxBasePointOwner;
 
 }
