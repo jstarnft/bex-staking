@@ -3,11 +3,10 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/interfaces/IERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-// import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-contract BinderContract is OwnableUpgradeable {
+contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
     /* ============================= Struct ============================= */
     enum BinderState {
