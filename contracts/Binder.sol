@@ -39,7 +39,6 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     /* ---------------- Signature --------------- */
     address public backendSigner;
     uint256 public SIGNATURE_VALID_TIME = 3 minutes;
-    // uint256 immutable SIGNATURE_SALT;
 
     /* ------------------- Tax ------------------ */
     uint256 public taxBasePointProtocol;
@@ -50,12 +49,16 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     /* ----------------- Storage ---------------- */
     // binder => [storage for this binder]
     mapping(string => BinderStorage) public binders; // TODO: change to get() functions
+
     // binder => [total share num of this binder]
     mapping(string => uint256) public totalShare;
+
     // binder => user => [user's share num of this binder]
     mapping(string => mapping(address => uint256)) public userShare;
+
     // binder => epoch => [participated user list of this binder in this epoch]
     mapping(string => mapping(uint16 => address [])) public userList;
+
     // binder => epoch => user => [user's invested amount for this binder in this epoch]
     mapping(string => mapping(uint16 => mapping(address => int))) public userInvested; 
 
@@ -203,21 +206,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
     /* ========================= Write functions ======================== */
 
-    /* ---------------- Register ---------------- */
-    function register(string memory name)
-        public
-        onlyWhenStateIs(name, BinderState.NotRegistered)
-    {
-        // TODO: Check signature
-
-        // Register the binder
-        binders[name].state = BinderState.NoOwner;
-    }
-
     /* --------- Internal state transfer -------- */
     function _countdownTriggerOnAuction(string memory name)
         internal
-        onlyWhenStateIs(name, BinderState.OnAuction)
         returns (bool stateChanged)
     {
         uint16 epoch = binders[name].auctionEpoch;
@@ -238,7 +229,6 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
     function _countdownTriggerHasOwner(string memory name)
         internal
-        onlyWhenStateIs(name, BinderState.HasOwner)
         returns (bool stateChanged)
     {
         if (block.timestamp - binders[name].lastTimePoint > HOLDING_PERIOD) {
@@ -252,7 +242,6 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
     function _countdownTriggerWaitingForRenewal(string memory name)
         internal
-        onlyWhenStateIs(name, BinderState.WaitingForRenewal)
         returns (bool stateChanged)
     {
         if (block.timestamp - binders[name].lastTimePoint > RENEWAL_WINDOW) {
@@ -266,8 +255,6 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     
     function _countdownTrigger(string memory name)
         internal
-        whenStateIsNot(name, BinderState.NotRegistered)
-        whenStateIsNot(name, BinderState.NoOwner)
         returns (bool stateChanged)
     {
         BinderState currentState = binders[name].state;
@@ -292,12 +279,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         }
     }
 
-    function _stateTransitionToAuction(string memory name)
-        internal
-        onlyWhenStateIs(name, BinderState.NoOwner)
-    {
+    function _stateTransitionToAuction(string memory name) internal {
         uint16 epoch = binders[name].auctionEpoch;
-
         binders[name] = BinderStorage({
             state: BinderState.OnAuction,       // State: 1 -> 2
             owner: address(this),
@@ -306,23 +289,36 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         });
     }
 
-    function _stateTransitionWhenRenewed(string memory name)
-        internal
-        onlyWhenStateIs(name, BinderState.WaitingForRenewal)
-    {
+    function _stateTransitionWhenRenewed(string memory name) internal {
         binders[name].state = BinderState.HasOwner;    // State: 4 -> 3
         binders[name].lastTimePoint = block.timestamp;
     }
 
-    function _userListManage(string memory name, uint16 epoch, address user)
-        internal
-    {
+    function _userListManage(string memory name, uint16 epoch, address user) internal {
         if (binders[name].state == BinderState.OnAuction && userInvested[name][epoch][user] == 0) {
             userList[name][epoch].push(user);
         }
     }
 
-    /* --------------- Buy & Sell --------------- */
+    /* --------------- Register & Buy & Sell --------------- */
+    function register(
+        string memory name,
+        uint256 timestamp,
+        bytes memory signature
+    )
+        public
+        onlyWhenStateIs(name, BinderState.NotRegistered)
+    {
+        // Check signature
+        checkSignature(
+            this.register.selector, name, 0,
+            _msgSender(), timestamp, signature
+        );
+
+        // Register the binder
+        binders[name].state = BinderState.NoOwner;
+    }
+
     function buyShare(
         string memory name,
         uint256 shareNum,
@@ -334,8 +330,12 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         shareNumNotZero(shareNum)
         returns (bool stateChanged)
     {
-        // TODO: Check signature
+        // Check signature
         address user = _msgSender();
+        checkSignature(
+            this.buyShare.selector, name, shareNum,
+            user, timestamp, signature
+        );
 
         // Transfer tokens to contract
         uint256 totalCost = bindingSumExclusive(totalShare[name], totalShare[name] + shareNum);
@@ -358,15 +358,21 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
     function sellShare(
         string memory name,
-        uint256 shareNum
+        uint256 shareNum,
+        uint256 timestamp,
+        bytes memory signature
     )
         public
         whenStateIsNot(name, BinderState.NotRegistered)
         shareNumNotZero(shareNum)
         returns (bool stateChanged)
     {
-        // TODO: Check signature
+        // Check signature
         address user = _msgSender();
+        checkSignature(
+            this.sellShare.selector, name, shareNum,
+            user, timestamp, signature
+        );
 
         // Update storage (state transfer)
         if (binders[name].state == BinderState.NoOwner) {
@@ -380,7 +386,6 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         uint256 totalReward = bindingSumExclusive(totalShare[name] - shareNum, totalShare[name]);
         uint256 feeForProtocol = totalReward * taxBasePointProtocol / 10000;
         uint256 feeForOwner = totalReward * taxBasePointOwner / 10000;
-        uint256 actualReward = totalReward - feeForProtocol - feeForOwner;
         feeCollectedProtocol += feeForProtocol;
         feeCollectedOwner[name] += feeForOwner;
 
@@ -390,19 +395,26 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         userInvested[name][binders[name].auctionEpoch][user] -= int(totalReward);
         
         // Transfer tokens to user
+        uint256 actualReward = totalReward - feeForProtocol - feeForOwner;
         tokenAddress.transfer(user, actualReward);
     }
 
     /* ------------ For binder owner ------------ */
     function renewOwnership(
         string memory name,
-        uint256 tokenAmount
+        uint256 tokenAmount,
+        uint256 timestamp,
+        bytes memory signature
     )
         public
         onlyBinderOwner(name)
         onlyWhenStateIs(name, BinderState.WaitingForRenewal)
     {
-        // TODO: Check signature
+        // Check signature
+        checkSignature(
+            this.renewOwnership.selector, name, tokenAmount,
+            _msgSender(), timestamp, signature
+        );
 
         // Transfer tokens to contract
         tokenAddress.transferFrom(_msgSender(), address(this), tokenAmount);
