@@ -60,7 +60,10 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     mapping(string => mapping(uint16 => address [])) public userList;
 
     // binder => epoch => user => [user's invested amount for this binder in this epoch]
-    mapping(string => mapping(uint16 => mapping(address => int))) public userInvested; 
+    mapping(string => mapping(uint16 => mapping(address => int))) public userInvested;
+
+    // keccak256(signature) => [whether this signature is used]
+    mapping(bytes32 => bool) public signatureUsed;
 
 
     /* =========================== Constructor ========================== */
@@ -89,58 +92,42 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
 
     /* ============================= Errors ============================= */
-    // TODO: add errors
+    error NotBinderOwner();
+    error ShareNumCannotBeZero();
+    error BinderNotRegistered();
+    error BinderNotInExpectedState(BinderState state);
+    error SignatureExpired();
+    error SignatureInvalid();
+    error SignatureAlreadyUsed();
+    error TimestampError();
 
 
     /* ============================ Modifiers =========================== */
-    modifier shareNumNotZero(uint256 shareNum) {
-        require(shareNum > 0, "Share num cannot be zero!");
-        _;
-    }
-
     modifier onlyBinderOwner(string memory name) {
-        require(
-            binders[name].owner == _msgSender(), 
-            "Only the binder owner can call this function!"
-        );
+        if (_msgSender() != binders[name].owner) {
+            revert NotBinderOwner();
+        }
         _;
     }
 
-    modifier onlyWhenStateIs(string memory name, BinderState state) {
-        string memory errorMessage;
-        if (state == BinderState.NotRegistered) {
-            errorMessage = "Not in state 'NotRegistered'!";
-        } else if (state == BinderState.NoOwner) {
-            errorMessage = "Not in state 'NoOwner'!";
-        } else if (state == BinderState.OnAuction) {
-            errorMessage = "Not in state 'OnAuction'!";
-        } else if (state == BinderState.HasOwner) {
-            errorMessage = "Not in state 'HasOwner'!";
-        } else if (state == BinderState.WaitingForRenewal) {
-            errorMessage = "Not in state 'WaitingForRenewal'!";
-        } else {
-            errorMessage = "Invalid state!";
+    modifier shareNumNotZero(uint256 shareNum) {
+        if (shareNum == 0) {
+            revert ShareNumCannotBeZero();
         }
-        require(binders[name].state == state, errorMessage);
         _;
     }
 
-    modifier whenStateIsNot(string memory name, BinderState state) {
-        string memory errorMessage;
-        if (state == BinderState.NotRegistered) {
-            errorMessage = "In state 'NotRegistered'!";
-        } else if (state == BinderState.NoOwner) {
-            errorMessage = "In state 'NoOwner'!";
-        } else if (state == BinderState.OnAuction) {
-            errorMessage = "In state 'OnAuction'!";
-        } else if (state == BinderState.HasOwner) {
-            errorMessage = "In state 'HasOwner'!";
-        } else if (state == BinderState.WaitingForRenewal) {
-            errorMessage = "In state 'WaitingForRenewal'!";
-        } else {
-            errorMessage = "Invalid state!";
+    modifier binderIsRegistered(string memory name) {
+        if (binders[name].state == BinderState.NotRegistered) {
+            revert BinderNotRegistered();
         }
-        require(binders[name].state != state, errorMessage);
+        _;
+    }
+
+    modifier onlyWhenStateIs(string memory name, BinderState expectedState) {
+        if (binders[name].state != expectedState) {
+            revert BinderNotInExpectedState(expectedState);
+        }
         _;
     }
 
@@ -171,40 +158,6 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             }
         }
         return topInvestor;
-    }
-
-    function checkSignature(
-        bytes4 selector,
-        string memory name,
-        uint256 content,    // Share amount or token amount or `0`.
-        address user,
-        uint256 timestamp,
-        bytes memory signature
-    ) public view {
-        bytes memory data = abi.encodePacked(
-            selector,
-            name,
-            content,
-            user,
-            timestamp
-        );
-        bytes32 signedMessageHash = ECDSA.toEthSignedMessageHash(data);
-        address signer = ECDSA.recover(signedMessageHash, signature);
-        
-        require(
-            block.timestamp - timestamp <= signatureValidTime,
-            "Signature expired!"
-        );
-
-        require(
-            block.timestamp > timestamp,
-            "Invalid timestamp! Check the backend."
-        );
-
-        require(
-            signer == backendSigner || DISABLE_SIG_MODE, // Just for debug. Will delete this later.
-            "Not the correct signer or invalid signature!"
-        );
     }
 
 
@@ -304,7 +257,43 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         }
     }
 
-    /* --------------- Register & Buy & Sell --------------- */
+    /* ---------------- Signature --------------- */
+    function consumeSignature(
+        bytes4 selector,
+        string memory name,
+        uint256 content,    // Share amount or token amount or `0`.
+        address user,
+        uint256 timestamp,
+        bytes memory signature
+    ) public {
+        // Prevent replay attack
+        bytes32 sigHash = keccak256(signature);
+        if (signatureUsed[sigHash]) 
+            revert SignatureAlreadyUsed();
+        signatureUsed[sigHash] = true;
+
+        // Check the signature timestamp
+        if (block.timestamp - timestamp > signatureValidTime)
+            revert SignatureExpired();
+        if (block.timestamp < timestamp)
+            revert TimestampError();
+
+        // Check the signature content
+        bytes memory data = abi.encodePacked(
+            selector,
+            name,
+            content,
+            user,
+            timestamp
+        );
+        bytes32 signedMessageHash = ECDSA.toEthSignedMessageHash(data);
+        address signer = ECDSA.recover(signedMessageHash, signature);
+        if (signer != backendSigner)
+            if (!DISABLE_SIG_MODE)  // Just for debug. Will delete this later.
+                revert SignatureInvalid();
+    }
+
+    /* ---------- Register & Buy & Sell --------- */
     function register(
         string memory name,
         uint256 timestamp,
@@ -314,7 +303,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         onlyWhenStateIs(name, BinderState.NotRegistered)
     {
         // Check signature
-        checkSignature(
+        consumeSignature(
             this.register.selector, name, 0,
             _msgSender(), timestamp, signature
         );
@@ -330,13 +319,13 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         bytes memory signature
     )
         public
-        whenStateIsNot(name, BinderState.NotRegistered)
+        binderIsRegistered(name)
         shareNumNotZero(shareNum)
         returns (bool stateChanged)
     {
         // Check signature
         address user = _msgSender();
-        checkSignature(
+        consumeSignature(
             this.buyShare.selector, name, shareNum,
             user, timestamp, signature
         );
@@ -367,13 +356,13 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         bytes memory signature
     )
         public
-        whenStateIsNot(name, BinderState.NotRegistered)
+        binderIsRegistered(name)
         shareNumNotZero(shareNum)
         returns (bool stateChanged)
     {
         // Check signature
         address user = _msgSender();
-        checkSignature(
+        consumeSignature(
             this.sellShare.selector, name, shareNum,
             user, timestamp, signature
         );
@@ -416,7 +405,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         onlyWhenStateIs(name, BinderState.WaitingForRenewal)
     {
         // Check signature
-        checkSignature(
+        consumeSignature(
             this.renewOwnership.selector, name, tokenAmount,
             _msgSender(), timestamp, signature
         );
@@ -434,7 +423,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     function collectFeeForOwner(string memory name)
         public
         onlyBinderOwner(name)
-        whenStateIsNot(name, BinderState.NotRegistered)
+        binderIsRegistered(name)
     {
         uint256 fee = feeCollectedOwner[name];
         feeCollectedOwner[name] = 0;
@@ -448,9 +437,20 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         tokenAddress.transfer(_msgSender(), fee);
     }
 
-    // address public backendSigner;
-    // uint256 public signatureValidTime;
-    // uint256 public taxBasePointProtocol;
-    // uint256 public taxBasePointOwner;
+    function setBackendSigner(address backendSigner_) public onlyOwner {
+        backendSigner = backendSigner_;
+    }
+
+    function setSignatureValidTime(uint256 signatureValidTime_) public onlyOwner {
+        signatureValidTime = signatureValidTime_;
+    }
+
+    function setTaxBasePointProtocol(uint256 taxBasePointProtocol_) public onlyOwner {
+        taxBasePointProtocol = taxBasePointProtocol_;
+    }
+
+    function setTaxBasePointOwner(uint256 taxBasePointOwner_) public onlyOwner {
+        taxBasePointOwner = taxBasePointOwner_;
+    }
 
 }
