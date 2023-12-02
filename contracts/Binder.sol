@@ -88,8 +88,26 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
 
     /* ============================= Events ============================= */
-    // TODO: add events
 
+    /* ------------- State transfer ------------- */
+    event BinderRegistered(string indexed name);
+    event AuctionStarted(string indexed name, uint16 indexed epoch);
+    event AuctionEnded(string indexed name, uint16 indexed epoch, address indexed newOwner);
+    event StartWaitingForRenewal(string indexed name);
+    event OwnerRenewed(string indexed name);
+    event OwnershipRenounced(string indexed name);
+
+    /* ------------- User's behavior ------------ */
+    event BuyShare(string indexed name, address indexed user, uint256 shareNum);
+    event SellShare(string indexed name, address indexed user, uint256 shareNum);
+    event CollectFeeForOwner(string indexed name, address indexed binderOwner, uint256 tokenAmount);
+
+    /* ------------- Admin's behavior ----------- */
+    event CollectFeeForProtocol(address indexed admin, uint256 tokenAmount);
+    event UpdatedackendSigner(address indexed oldSigner, address indexed newSigner);
+    event UpdatedSignatureValidTime(uint256 oldTime, uint256 newTime);
+    event UpdatedTaxBasePointProtocol(uint256 oldTax, uint256 newTax);
+    event UpdatedTaxBasePointOwner(uint256 oldTax, uint256 newTax);
 
     /* ============================= Errors ============================= */
     error NotBinderOwner();
@@ -180,6 +198,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
                 auctionEpoch: epoch
             });
             stateChanged = true;
+            emit AuctionEnded(name, epoch, topInvestor);
         }
         stateChanged = false;
     }
@@ -193,6 +212,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             binders[name].state = BinderState.WaitingForRenewal;    // State: 3 -> 4
             binders[name].lastTimePoint = block.timestamp;
             stateChanged = true;
+            emit StartWaitingForRenewal(name);
         }
         stateChanged = false;
     }
@@ -206,6 +226,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             binders[name].state = BinderState.NoOwner;              // State: 4 -> 1
             binders[name].owner = address(this);
             stateChanged = true;
+            emit OwnershipRenounced(name);
         }
         stateChanged = false;
     }
@@ -244,17 +265,18 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             lastTimePoint: block.timestamp,
             auctionEpoch: epoch + 1             // Only place to add 1 to the epoch
         });
+        emit AuctionStarted(name, epoch + 1);
     }
 
     function _stateTransitionWhenRenewed(string memory name) internal {
         binders[name].state = BinderState.HasOwner;    // State: 4 -> 3
         binders[name].lastTimePoint = block.timestamp;
+        emit OwnerRenewed(name);
     }
 
     function _userListManage(string memory name, uint16 epoch, address user) internal {
-        if (binders[name].state == BinderState.OnAuction && userInvested[name][epoch][user] == 0) {
+        if (binders[name].state == BinderState.OnAuction && userInvested[name][epoch][user] == 0)
             userList[name][epoch].push(user);
-        }
     }
 
     /* ---------------- Signature --------------- */
@@ -310,6 +332,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
         // Register the binder
         binders[name].state = BinderState.NoOwner;
+        emit BinderRegistered(name);
     }
 
     function buyShare(
@@ -347,6 +370,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         totalShare[name] += shareNum;
         userShare[name][user] += shareNum;
         userInvested[name][binders[name].auctionEpoch][user] += int(totalCost);
+        emit BuyShare(name, user, shareNum);
     }
 
     function sellShare(
@@ -391,6 +415,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         // Transfer tokens to user
         uint256 actualReward = totalReward - feeForProtocol - feeForOwner;
         tokenAddress.transfer(user, actualReward);
+        emit SellShare(name, user, shareNum);
     }
 
     /* ------------ For binder owner ------------ */
@@ -428,6 +453,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         uint256 fee = feeCollectedOwner[name];
         feeCollectedOwner[name] = 0;
         tokenAddress.transfer(_msgSender(), fee);
+        emit CollectFeeForOwner(name, _msgSender(), fee);
     }
 
     /* ---------------- For admin --------------- */
@@ -435,21 +461,26 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         uint256 fee = feeCollectedProtocol;
         feeCollectedProtocol = 0;
         tokenAddress.transfer(_msgSender(), fee);
+        emit CollectFeeForProtocol(_msgSender(), fee);
     }
 
     function setBackendSigner(address backendSigner_) public onlyOwner {
+        emit UpdatedackendSigner(backendSigner, backendSigner_);
         backendSigner = backendSigner_;
     }
 
     function setSignatureValidTime(uint256 signatureValidTime_) public onlyOwner {
+        emit UpdatedSignatureValidTime(signatureValidTime, signatureValidTime_);
         signatureValidTime = signatureValidTime_;
     }
 
     function setTaxBasePointProtocol(uint256 taxBasePointProtocol_) public onlyOwner {
+        emit UpdatedTaxBasePointProtocol(taxBasePointProtocol, taxBasePointProtocol_);
         taxBasePointProtocol = taxBasePointProtocol_;
     }
 
     function setTaxBasePointOwner(uint256 taxBasePointOwner_) public onlyOwner {
+        emit UpdatedTaxBasePointOwner(taxBasePointOwner, taxBasePointOwner_);
         taxBasePointOwner = taxBasePointOwner_;
     }
 
