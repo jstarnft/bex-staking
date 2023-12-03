@@ -26,6 +26,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         uint16 auctionEpoch;        // The epoch of the auction, add by 1 when a new auction starts
     }
 
+
     /* ============================ Variables =========================== */
 
     /* --------------- Time period -------------- */
@@ -108,6 +109,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     event UpdatedSignatureValidTime(uint256 oldTime, uint256 newTime);
     event UpdatedTaxBasePointProtocol(uint256 oldTax, uint256 newTax);
     event UpdatedTaxBasePointOwner(uint256 oldTax, uint256 newTax);
+
 
     /* ============================= Errors ============================= */
     error NotBinderOwner();
