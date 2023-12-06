@@ -91,17 +91,21 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     /* ============================= Events ============================= */
 
     /* ------------- State transfer ------------- */
-    event BinderRegistered(string indexed name);
-    event AuctionStarted(string indexed name, uint16 indexed epoch);
-    event AuctionEnded(string indexed name, uint16 indexed epoch, address indexed newOwner);
-    event StartWaitingForRenewal(string indexed name);
-    event OwnerRenewed(string indexed name);
-    event OwnershipRenounced(string indexed name);
+    event BinderRegistered(string name);
+    event AuctionStarted(string name, uint16 indexed epoch);
+    event AuctionEnded(string name, uint16 indexed epoch, address indexed newOwner);
+    event StartWaitingForRenewal(string name);
+    event OwnerRenewed(string name);
+    event OwnershipRenounced(string name);
 
     /* ------------- User's behavior ------------ */
-    event BuyShare(string indexed name, address indexed user, uint256 shareNum);
-    event SellShare(string indexed name, address indexed user, uint256 shareNum);
-    event CollectFeeForOwner(string indexed name, address indexed binderOwner, uint256 tokenAmount);
+    event BuyShare(
+        string name, address indexed user, uint256 shareNum, uint256 spentToken, uint256 nextId
+    );
+    event SellShare(
+        string name, address indexed user, uint256 shareNum, uint256 receivedToken, uint256 nextId
+    );
+    event CollectFeeForOwner(string name, address indexed binderOwner, uint256 tokenAmount);
 
     /* ------------- Admin's behavior ----------- */
     event CollectFeeForProtocol(address indexed admin, uint256 tokenAmount);
@@ -372,7 +376,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         totalShare[name] += shareNum;
         userShare[name][user] += shareNum;
         userInvested[name][binders[name].auctionEpoch][user] += int(totalCost);
-        emit BuyShare(name, user, shareNum);
+        uint256 nextId = totalShare[name];
+        emit BuyShare(name, user, shareNum, totalCost, nextId);
     }
 
     function sellShare(
@@ -417,7 +422,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         // Transfer tokens to user
         uint256 actualReward = totalReward - feeForProtocol - feeForOwner;
         tokenAddress.transfer(user, actualReward);
-        emit SellShare(name, user, shareNum);
+        uint256 nextId = totalShare[name];
+        emit SellShare(name, user, shareNum, totalReward, nextId);
     }
 
     /* ------------ For binder owner ------------ */
