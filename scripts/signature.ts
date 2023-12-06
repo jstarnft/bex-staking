@@ -12,8 +12,7 @@ async function signRequest(selector: string, name: string, amount: string, user:
 }
 
 (async function () {
-  const privateKey = process.env.TEST_PRIVATE_KEY!
-  console.log(privateKey)
+  const privateKey = process.env.PRIVATE_KEY_ADMIN!
   const wallet = new ethers.Wallet(privateKey)
   console.log('Signer address:', wallet.address)
 

@@ -19,6 +19,8 @@ const config: HardhatUserConfig = {
       accounts: [
         process.env.PRIVATE_KEY_ADMIN!, 
       ]
+      // gas: "auto",
+      // gasPrice: 150000000000, // 150Gwei
     },
   }
 };

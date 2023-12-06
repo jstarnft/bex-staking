@@ -91,7 +91,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     /* ============================= Events ============================= */
 
     /* ------------- State transfer ------------- */
-    event BinderRegistered(string name);
+    event BinderRegistered(string name, address indexed registerAddress);
     event AuctionStarted(string name, uint16 indexed epoch);
     event AuctionEnded(string name, uint16 indexed epoch, address indexed newOwner);
     event StartWaitingForRenewal(string name);
@@ -338,7 +338,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
         // Register the binder
         binders[name].state = BinderState.NoOwner;
-        emit BinderRegistered(name);
+        emit BinderRegistered(name, _msgSender());
     }
 
     function buyShare(
