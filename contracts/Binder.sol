@@ -46,10 +46,10 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     uint256 public feeCollectedProtocol;
 
     // binder => [fee collected for this binder's owner]
-    mapping(string => uint256) public feeCollectedOwner;
+    mapping(string => uint256) public feeCollectedBinder;
 
     // binder => [storage for this binder]
-    mapping(string => BinderStorage) public binders;
+    mapping(string => BinderStorage) binders;
 
     // binder => [total share num of this binder]
     mapping(string => uint256) public totalShare;
@@ -58,34 +58,13 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     mapping(string => mapping(address => uint256)) public userShare;
 
     // binder => epoch => [participated user list of this binder in this epoch]
-    mapping(string => mapping(uint16 => address [])) public userList;
+    mapping(string => mapping(uint16 => address [])) userList;
 
     // binder => epoch => user => [user's invested amount for this binder in this epoch]
-    mapping(string => mapping(uint16 => mapping(address => int))) public userInvested;
+    mapping(string => mapping(uint16 => mapping(address => int))) userInvested;
 
     // keccak256(signature) => [whether this signature is used]
-    mapping(bytes32 => bool) public signatureUsed;
-
-
-    /* =========================== Constructor ========================== */
-    function initialize(
-        address tokenAddress_,
-        address backendSigner_
-    ) public initializer {
-        // Init parent contracts
-        __Ownable_init();
-
-        // Init token address & signer address
-        tokenAddress = IERC20(tokenAddress_);
-        backendSigner = backendSigner_;
-
-        // Init tax base points (`500` means 5%)
-        taxBasePointProtocol = 500;
-        taxBasePointOwner = 500;
-
-        // Init signature valid time
-        signatureValidTime = 3 minutes;
-    }
+    mapping(bytes32 => bool) public signatureIsUsed;
 
 
     /* ============================= Events ============================= */
@@ -156,7 +135,40 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     }
 
 
-    /* ========================= View functions ========================= */
+    /* =========================== Constructor ========================== */
+    function initialize(
+        address tokenAddress_,
+        address backendSigner_
+    ) public initializer {
+        // Init parent contracts
+        __Ownable_init();
+
+        // Init token address & signer address
+        tokenAddress = IERC20(tokenAddress_);
+        backendSigner = backendSigner_;
+
+        // Init tax base points (`500` means 5%)
+        taxBasePointProtocol = 500;
+        taxBasePointOwner = 500;
+
+        // Init signature valid time
+        signatureValidTime = 3 minutes;
+    }
+
+
+    /* ===================== Pure functions ==================== */
+    function getAutcionDuration() public virtual pure returns (uint256) {
+        return AUCTION_DURATION;      // For convinience of overrided in test contract
+    }
+
+    function getHoldingPeriod() public virtual pure returns (uint256) {
+        return HOLDING_PERIOD;
+    }
+
+    function getRenewalWindow() public virtual pure returns (uint256) {
+        return RENEWAL_WINDOW;
+    }
+
     function bindingFunction(uint256 x) public virtual pure returns (uint256) {
         return 10 * x * x;
     }
@@ -167,6 +179,60 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             sum += bindingFunction(i);
         }
         return sum;
+    }
+
+
+    /* ========================= View functions ========================= */
+    function getBinderState(string memory name) public view returns (BinderState) {
+        return binders[name].state;
+    }
+
+    function getBinderOwner(string memory name) public view returns (address) {
+        return binders[name].owner;
+    }
+
+    function getBinderLastTimePoint(string memory name) public view returns (uint256) {
+        return binders[name].lastTimePoint;
+    }
+
+    function getBinderLeftTime(string memory name) public view returns (uint256) {
+        BinderState currentState = binders[name].state;
+
+        if (currentState == BinderState.NotRegistered 
+            || currentState == BinderState.NoOwner) return 0;
+        
+        uint256 passedTime = block.timestamp - binders[name].lastTimePoint;
+        
+        if (currentState == BinderState.OnAuction) 
+            return getAutcionDuration() > passedTime ? getAutcionDuration() - passedTime : 0;
+        
+        else if (currentState == BinderState.HasOwner)
+            return getHoldingPeriod() > passedTime ? getHoldingPeriod() - passedTime : 0;
+        
+        else
+            return getRenewalWindow() > passedTime ? getRenewalWindow() - passedTime : 0;
+    }
+
+    function getBinderAuctionEpoch(string memory name) public view returns (uint16) {
+        return binders[name].auctionEpoch;
+    }
+
+    function getUserInvestedAmount(string memory name, address user) public view returns (int) {
+        return userInvested[name][binders[name].auctionEpoch][user];
+    }
+
+    function getUserHistoryInvestedAmount(
+        string memory name, address user, uint16 epoch
+    ) public view returns (int) {
+        return userInvested[name][epoch][user];
+    }
+
+    function getCurrentInvestedUsers(string memory name) public view returns (address [] memory) {
+        return userList[name][binders[name].auctionEpoch];
+    }
+
+    function findCurrentTopInvestor(string memory name) public view returns (address) {
+        return findTopInvestor(name, binders[name].auctionEpoch);
     }
 
     function findTopInvestor(string memory name, uint16 epoch) public view returns (address) {
@@ -194,7 +260,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     {
         uint16 epoch = binders[name].auctionEpoch;
 
-        if (block.timestamp - binders[name].lastTimePoint > AUCTION_DURATION) {
+        if (block.timestamp - binders[name].lastTimePoint > getAutcionDuration()) {
             // The auction is over. The binder has an owner now.
             address topInvestor = findTopInvestor(name, epoch);
             binders[name] = BinderStorage({
@@ -213,7 +279,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         internal
         returns (bool stateChanged)
     {
-        if (block.timestamp - binders[name].lastTimePoint > HOLDING_PERIOD) {
+        if (block.timestamp - binders[name].lastTimePoint > getHoldingPeriod()) {
             // The owner's holding period is over. Now waiting for the owner's renewal.
             binders[name].state = BinderState.WaitingForRenewal;    // State: 3 -> 4
             binders[name].lastTimePoint = block.timestamp;
@@ -227,10 +293,10 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         internal
         returns (bool stateChanged)
     {
-        if (block.timestamp - binders[name].lastTimePoint > RENEWAL_WINDOW) {
+        if (block.timestamp - binders[name].lastTimePoint > getRenewalWindow()) {
             // The renewal window is over. The binder is back to the NoOwner state.
             binders[name].state = BinderState.NoOwner;              // State: 4 -> 1
-            binders[name].owner = address(this);
+            binders[name].owner = address(0);
             stateChanged = true;
             emit OwnershipRenounced(name);
         }
@@ -267,7 +333,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         uint16 epoch = binders[name].auctionEpoch;
         binders[name] = BinderStorage({
             state: BinderState.OnAuction,       // State: 1 -> 2
-            owner: address(this),
+            owner: address(0),
             lastTimePoint: block.timestamp,
             auctionEpoch: epoch + 1             // Only place to add 1 to the epoch
         });
@@ -296,9 +362,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     ) public {
         // Prevent replay attack
         bytes32 sigHash = keccak256(signature);
-        if (signatureUsed[sigHash]) 
+        if (signatureIsUsed[sigHash]) 
             revert SignatureAlreadyUsed();
-        signatureUsed[sigHash] = true;
+        signatureIsUsed[sigHash] = true;
 
         // Check the signature timestamp
         if (block.timestamp - timestamp > signatureValidTime)
@@ -412,7 +478,7 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         uint256 feeForProtocol = totalReward * taxBasePointProtocol / 10000;
         uint256 feeForOwner = totalReward * taxBasePointOwner / 10000;
         feeCollectedProtocol += feeForProtocol;
-        feeCollectedOwner[name] += feeForOwner;
+        feeCollectedBinder[name] += feeForOwner;
 
         // Update storage (share and token amount)
         totalShare[name] -= shareNum;
@@ -458,8 +524,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         onlyBinderOwner(name)
         binderIsRegistered(name)
     {
-        uint256 fee = feeCollectedOwner[name];
-        feeCollectedOwner[name] = 0;
+        uint256 fee = feeCollectedBinder[name];
+        feeCollectedBinder[name] = 0;
         tokenAddress.transfer(_msgSender(), fee);
         emit CollectFeeForOwner(name, _msgSender(), fee);
     }
