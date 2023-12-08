@@ -15,3 +15,6 @@ contracts/artifacts
 .env
 node_modules
 typechain-types
+
+# temp
+outputabi.py

@@ -2,7 +2,7 @@ import { ethers, upgrades } from "hardhat"
 import "dotenv/config"
 
 async function main() {
-  const newContractName = "BinderContract"
+  const newContractName = "BinderForTest"
   const proxyAddress = process.env.BINDER_CONTRACT!
 
   console.log(`Upgrading ${newContractName} contract for: \x1b[32m${proxyAddress}\x1b[0m`)

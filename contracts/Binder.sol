@@ -30,9 +30,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
     /* ============================ Variables =========================== */
 
     /* --------------- Time period -------------- */
-    uint256 public constant AUCTION_DURATION = 2 days;
-    uint256 public constant HOLDING_PERIOD = 90 days;
-    uint256 public constant RENEWAL_WINDOW = 2 days;
+    uint256 constant AUCTION_DURATION = 2 days;
+    uint256 constant HOLDING_PERIOD = 90 days;
+    uint256 constant RENEWAL_WINDOW = 2 days;
 
     /* ------------ Super parameters ------------ */
     IERC20 public tokenAddress;
