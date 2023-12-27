@@ -19,7 +19,7 @@ async function signBaseRequest(selector: string, name: string, amount: string, u
   )
   const messageBytes = ethers.getBytes(messageHexstring)
   const signature = await signer.signMessage(messageBytes)
-  return { messageHexstring, signature }
+  return { messageHexstring, signature, time }
 }
 
 async function signRegister(name: string, user: string, signer: ethers.Wallet) {
@@ -52,13 +52,14 @@ async function signRenewOwnership(name: string, tokenAmount: string, user: strin
   const wallet = new ethers.Wallet(privateKey)
   console.log('Signer address:', wallet.address)
 
-  const amount = '70000000000000000'
+  const amount = '7000000000'
   const user = '0xb54e978a34Af50228a3564662dB6005E9fB04f5a'
 
-  const { messageHexstring, signature } = await signRenewOwnership('hi', amount, user, wallet)
+  const { messageHexstring, signature, time } = await signRenewOwnership('hi', amount, user, wallet)
 
   console.log('Raw message:', messageHexstring)
   console.log('Signature:', signature)
+  console.log('Timestamp: ', time)
 })()
 
 /**
