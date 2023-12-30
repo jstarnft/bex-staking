@@ -175,7 +175,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         return 10 * x * x;
     }
 
-    function bindingSumExclusive(uint256 start, uint256 end) public virtual pure returns (uint256) {
+    function bindingSumExclusive(uint256 start, uint256 end) 
+        public virtual pure returns (uint256) {
         uint256 sum = 0;
         for (uint256 i = start; i < end; i++) {
             sum += bindingFunction(i);
@@ -274,8 +275,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             stateChanged = true;
             emit AuctionEnded(name, epoch, topInvestor);
             emit OwnershipTransferred(name, address(0), topInvestor);
+        } else {
+            stateChanged = false;
         }
-        stateChanged = false;
     }
 
     function _countdownTriggerHasOwner(string memory name)
@@ -288,8 +290,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             binders[name].lastTimePoint = block.timestamp;
             stateChanged = true;
             emit StartWaitingForRenewal(name);
+        } else {
+            stateChanged = false;
         }
-        stateChanged = false;
     }
 
     function _countdownTriggerWaitingForRenewal(string memory name)
@@ -303,8 +306,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
             binders[name].owner = address(0);
             stateChanged = true;
             emit OwnershipTransferred(name, oldOwner, address(0));
+        } else {
+            stateChanged = false;
         }
-        stateChanged = false;
     }
     
     function _countdownTrigger(string memory name)
@@ -432,7 +436,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
         // Transfer tokens to contract
         uint256 totalCost = bindingSumExclusive(totalShare[name], totalShare[name] + shareNum);
-        if (totalCost > maxOutTokenAmount) revert TotalCostMoreThanExpected();
+        if (totalCost > maxOutTokenAmount) 
+            revert TotalCostMoreThanExpected();
         tokenAddress.transferFrom(user, address(this), totalCost);
 
         // Update storage (state transfer)
@@ -482,7 +487,8 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
 
         // Calculate and update fees
         uint256 totalReward = bindingSumExclusive(totalShare[name] - shareNum, totalShare[name]);
-        if (totalReward < minInTokenAmount) revert TotalRewardLessThanExpected();
+        if (totalReward < minInTokenAmount) 
+            revert TotalRewardLessThanExpected();
         uint256 feeForProtocol = totalReward * taxBasePointProtocol / 10000;
         uint256 feeForOwner = totalReward * taxBasePointOwner / 10000;
         feeCollectedProtocol += feeForProtocol;
@@ -511,7 +517,9 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         onlyBinderOwner(name)
         onlyWhenStateIs(name, BinderState.WaitingForRenewal)
     {
-        // TODO: check state transfer??
+        // Check if the renewal window is over
+        if (block.timestamp - binders[name].lastTimePoint > getRenewalWindow())
+            revert("Renewal window is over!");
 
         // Check signature
         consumeSignature(
@@ -529,10 +537,10 @@ contract BinderContract is OwnableUpgradeable, PausableUpgradeable {
         feeCollectedProtocol += tokenAmount;
     }
 
-    function transferBinderOwnership(   // Notice there is a `transferOwnership` function in OwnableUpgradeable!
+    function transferBinderOwnership(   
         string memory name,
         address newOwner
-    )
+    )   // There's a `transferOwnership` function in `OwnableUpgradeable`!
         public
         onlyBinderOwner(name)
         onlyWhenStateIs(name, BinderState.HasOwner)
